@@ -45,12 +45,20 @@ free, it works inside Hong Kong, and coursework is exactly the use it is license
 
 > GitHub Models was retired on 2026-07-30 — a GitHub PAT no longer works for inference.
 
-The HKU portal issues an *API key pair* for chat completion, embedding and image generation.
-Its gateway may not read `Authorization: Bearer`; set `LLM_AUTH_HEADER` to whatever the
-portal's try-it panel shows (usually `Ocp-Apim-Subscription-Key`). Both headers are sent, so
-leaving it empty is safe for ordinary OpenAI-compatible hosts. The monthly credit pool is
-shared with the HKU GenAI web app, and each group member should use their own key rather than
-sharing one.
+The HKU portal issues an *API key pair* for chat completion, embedding and image generation,
+but its APIs come in **two different request shapes**:
+
+- **Azure DeepSeek Service API (Students)** — `POST /models/chat/completions`, OpenAI-compatible.
+  Use it for DeepSeek-V4-Flash / DeepSeek-V4-Pro: set `LLM_BASE_URL` to the request URL up to
+  and including `/models`, and `LLM_MODEL=DeepSeek-V4-Flash`.
+- **Vertex AI Gemini Service API (Students)** — `POST /{deployment-id}:generateContent`, Google's
+  own shape. Set `LLM_API_STYLE=vertex`, `LLM_BASE_URL` to everything before
+  `/{deployment-id}:generateContent`, and `LLM_MODEL` to the deployment id.
+
+The key is sent three ways (`Authorization: Bearer`, `api-key`, and the gateway subscription
+key); extra headers are ignored by hosts that don't use them. The monthly credit pool is shared
+with the HKU GenAI web app, and each group member should use their own key rather than sharing
+one.
 
 Any OpenAI-compatible endpoint works — the app only uses `chat.completions`.
 After editing `.env`, verify the key before opening the app:

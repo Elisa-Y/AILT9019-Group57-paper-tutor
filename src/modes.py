@@ -79,17 +79,25 @@ def answer_question(index: BM25Index, question: str, k: int = 5) -> dict:
 
 def _section_excerpt(paper: Paper, section: str, limit: int = 6000) -> str:
     s = paper.section(section)
-    if not s:
-        return ""
     out, used = [], 0
-    for para in s.paragraphs:
-        if used >= limit:
-            out.append("... [truncated]")
-            break
-        text = para.text[: limit - used]
-        out.append(f"[p.{para.page}] {text}")
-        used += len(text)
-    return "\n".join(out)
+    if s and s.paragraphs:
+        for para in s.paragraphs:
+            if used >= limit:
+                out.append("... [truncated]")
+                break
+            text = para.text[: limit - used]
+            out.append(f"[p.{para.page}] {text}")
+            used += len(text)
+        return "\n".join(out)
+
+    # Heading detection failed for this name (or the section is empty). Falling back to
+    # the abstract keeps the tutor usable instead of asking about an empty string.
+    for name in ("Abstract", "Introduction"):
+        fallback = paper.section(name)
+        if fallback and fallback.paragraphs:
+            text = "\n".join(f"[p.{pa.page}] {pa.text}" for pa in fallback.paragraphs)
+            return f"(section '{section}' not found - using the {name} instead)\n{text[:limit]}"
+    return f"(no text could be extracted for '{section}')"
 
 
 def socratic_question(paper: Paper, section: str, level: int, history: list[str]) -> dict:

@@ -1,14 +1,17 @@
-"""Minimal LLM wrapper: any OpenAI-compatible endpoint + on-disk response cache.
+"""Minimal LLM wrapper: two API styles + on-disk response cache.
 
 Supported out of the box (set these in .env):
-  HKU ITS  base_url=from developer.hku.hk   model=the id shown in the portal
+  HKU ITS  base_url=<everything before /{deployment-id}:generateContent>
+           model=gemini-3.5-flash        LLM_API_STYLE=vertex
+           (Vertex AI generateContent format, api-key + subscription-key headers)
   Gemini   base_url=https://generativelanguage.googleapis.com/v1beta/openai/  model=gemini-2.5-flash
   OpenAI   (leave base_url empty)                                             model=gpt-4o-mini
   DeepSeek base_url=https://api.deepseek.com                                  model=deepseek-chat
 
-Some gateways (Azure API Management, which the HKU portal looks like) do not read
-`Authorization: Bearer`. Set LLM_AUTH_HEADER to the header name the portal's own
-docs show, e.g. Ocp-Apim-Subscription-Key, and the key is sent there as well.
+Set LLM_API_STYLE=vertex for gateways that expose Google's generateContent shape
+(the HKU ITS Developer Portal does); the default `openai` style sends the key as
+`Authorization: Bearer`, and LLM_AUTH_HEADER adds a second copy under another
+header name for API-gateway style servers.
 
 The cache matters for the demo: if the API is rate limited during the recording,
 the same prompt replays instantly from disk.
@@ -41,8 +44,9 @@ def settings() -> dict:
     base = os.getenv("LLM_BASE_URL", "").strip() or None
     model = os.getenv("LLM_MODEL", "").strip() or ("gpt-4o-mini" if base is None else "gemini-2.5-flash")
     header = os.getenv("LLM_AUTH_HEADER", "").strip() or None
+    style = os.getenv("LLM_API_STYLE", "openai").strip().lower() or "openai"
     return {"api_key": key, "base_url": base, "model": model,
-            "auth_header": header, "ready": bool(key)}
+            "auth_header": header, "style": style, "ready": bool(key)}
 
 
 def _client() -> OpenAI:
@@ -52,10 +56,12 @@ def _client() -> OpenAI:
             "No API key found. Create a .env file in the project root with LLM_API_KEY=... "
             "(copy .env.example)."
         )
-    # Send the key both ways: `Authorization: Bearer` for OpenAI-style servers and
-    # the custom header name for API-gateway style servers. Extra headers are ignored
-    # by servers that do not use them.
-    headers = {cfg["auth_header"]: cfg["api_key"]} if cfg["auth_header"] else None
+    # Send the key three ways: `Authorization: Bearer` for OpenAI-style servers, plus
+    # `api-key` and the API-gateway subscription key. Extra headers are ignored by
+    # servers that do not use them, so this stays safe for any OpenAI-compatible host.
+    headers = {"api-key": cfg["api_key"], "Ocp-Apim-Subscription-Key": cfg["api_key"]}
+    if cfg["auth_header"]:
+        headers[cfg["auth_header"]] = cfg["api_key"]
     return OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], default_headers=headers)
 
 
@@ -101,6 +107,71 @@ def _body_hint(exc: Exception) -> str:
     return f"\n       server said: {body[:300]}" if body and body != "OK" else ""
 
 
+def _vertex_url_and_headers(cfg: dict) -> tuple[str, dict]:
+    base = (cfg["base_url"] or "").rstrip("/")
+    # Portal shows: POST /{deployment-id}:generateContent — base URL is everything before it.
+    url = f"{base}/{cfg['model']}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        # the try-it panel sends the subscription key both ways; extra headers are harmless
+        "api-key": cfg["api_key"],
+        "Ocp-Apim-Subscription-Key": cfg["api_key"],
+    }
+    if cfg["auth_header"]:
+        headers[cfg["auth_header"]] = cfg["api_key"]
+    return url, headers
+
+
+def _vertex_text(data: dict) -> str:
+    fb = (data.get("promptFeedback") or {}).get("blockReason")
+    if fb:
+        raise LLMError(f"The gateway blocked this prompt (blockReason={fb}).")
+    candidates = data.get("candidates") or []
+    if not candidates:
+        raise LLMError(f"No candidates in reply. Raw: {json.dumps(data)[:300]}")
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts).strip()
+    if not text:
+        reason = candidates[0].get("finishReason", "?")
+        raise LLMError(f"Empty reply (finishReason={reason}). Raw: {json.dumps(data)[:300]}")
+    return text
+
+
+def _vertex_chat(cfg: dict, system: str, user: str, temperature: float, max_tokens: int) -> str:
+    import urllib.error
+    import urllib.request
+
+    url, headers = _vertex_url_and_headers(cfg)
+    payload = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+    )
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = resp.read().decode("utf-8", "replace")
+                status_code = resp.status
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")
+            status_code = exc.code
+        except Exception as exc:  # noqa: BLE001 - network level
+            raise LLMError(_explain(exc)) from exc
+        if status_code == 429 and attempt < 2:
+            time.sleep(5 * (attempt + 1))
+            continue
+        if status_code >= 400:
+            err = RuntimeError(f"HTTP {status_code}")
+            err.status_code = status_code  # type: ignore[attr-defined]
+            err.response_body = body  # type: ignore[attr-defined]
+            raise LLMError(_explain(err) + f"\n       server said: {body.strip()[:300]}")
+        return _vertex_text(json.loads(body))
+    raise LLMError("Unreachable")  # pragma: no cover
+
+
 def chat(system: str, user: str, temperature: float = 0.2, max_tokens: int = 2000) -> str:
     """Single-turn call with a disk cache. Returns plain text."""
     cfg = settings()
@@ -108,30 +179,33 @@ def chat(system: str, user: str, temperature: float = 0.2, max_tokens: int = 200
     if key.exists():
         return json.loads(key.read_text())["text"]
 
+    if cfg["style"] == "vertex":
+        text = _vertex_chat(cfg, system, user, temperature, max_tokens)
+    else:
+        text = _openai_chat(cfg, system, user, temperature, max_tokens)
+
+    if not text:
+        raise LLMError("The endpoint returned an empty reply. Try another model in .env.")
+    key.write_text(json.dumps({"text": text, "model": cfg["model"]}, ensure_ascii=False))
+    return text
+
+
+def _openai_chat(cfg: dict, system: str, user: str, temperature: float, max_tokens: int) -> str:
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    last_exc: Exception | None = None
     for attempt in range(3):
         try:
             resp = _client().chat.completions.create(
                 model=cfg["model"], temperature=temperature,
                 max_tokens=max_tokens, messages=messages,
             )
-            text = (resp.choices[0].message.content or "").strip()
-            break
+            return (resp.choices[0].message.content or "").strip()
         except Exception as exc:  # noqa: BLE001
-            last_exc = exc
             # free tiers are rate limited per minute; one short wait usually clears a 429
             if getattr(exc, "status_code", None) == 429 and attempt < 2:
                 time.sleep(5 * (attempt + 1))
                 continue
             raise LLMError(_explain(exc) + _body_hint(exc)) from exc
-    else:  # pragma: no cover
-        raise LLMError(_explain(last_exc or RuntimeError("unknown error")))
-
-    if not text:
-        raise LLMError("The endpoint returned an empty reply. Try another model in .env.")
-    key.write_text(json.dumps({"text": text, "model": cfg["model"]}, ensure_ascii=False))
-    return text
+    raise LLMError("Unreachable")  # pragma: no cover
 
 
 def _extract_json(text: str) -> dict:

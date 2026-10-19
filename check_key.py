@@ -19,14 +19,24 @@ def main() -> int:
     cfg = settings()
     print(f"endpoint : {cfg['base_url'] or 'https://api.openai.com/v1'}")
     print(f"model    : {cfg['model']}")
-    print(f"auth     : {'Bearer + ' + cfg['auth_header'] if cfg['auth_header'] else 'Bearer'}")
+    if cfg["style"] == "vertex":
+        print("style    : Vertex AI generateContent (HKU portal)")
+        print("auth     : api-key + Ocp-Apim-Subscription-Key headers")
+    else:
+        print("auth     : Bearer + api-key + subscription-key headers")
     if not cfg["ready"]:
         print("\nFAIL  no key found.")
         print("      cp .env.example .env  and put LLM_API_KEY=... in it")
         return 1
-    if "REPLACE-WITH" in (cfg["base_url"] or "") or "REPLACE-WITH" in cfg["model"]:
-        print("\nFAIL  .env still contains the placeholder values from .env.example.")
-        print("      Copy LLM_BASE_URL and LLM_MODEL from the portal's API documentation page.")
+    if ("REPLACE-WITH" in (cfg["base_url"] or "") or "REPLACE-WITH" in cfg["model"]
+            or "在这里" in (cfg["base_url"] or "") or "在这里" in cfg["model"]
+            or "在这里" in cfg["api_key"]):
+        print("\nFAIL  .env still contains the placeholder text.")
+        print("      Open .env and replace the three lines with the key and URL from the portal.")
+        return 1
+    if cfg["base_url"] and not cfg["base_url"].startswith("http"):
+        print("\nFAIL  LLM_BASE_URL must start with https:// — it is currently:")
+        print(f"      {cfg['base_url']}")
         return 1
     print(f"key      : {cfg['api_key'][:6]}...{cfg['api_key'][-4:]}  ({len(cfg['api_key'])} chars)")
 
