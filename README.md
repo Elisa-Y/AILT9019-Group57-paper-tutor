@@ -31,15 +31,17 @@ cp .env.example .env        # then put your key in .env
 ```
 
 `.env` needs one of these. **Gemini API is not available in Hong Kong, Macao or mainland China**
-(Google's supported-region list excludes them), so the default preset here is GitHub Models:
+(Google's supported-region list excludes them), so the default preset here is Groq:
 
 | Preset | Cost | How to get a key |
 |---|---|---|
-| **GitHub Models** (default) | free, ~50–150 req/day | GitHub → Settings → Developer settings → Fine-grained token → Account permissions → **Models: read-only** |
-| Google Gemini | free, ~1,500 req/day | aistudio.google.com → Get API key (needs a non-HK account + IP) |
-| OpenRouter | `:free` models, 50 req/day | openrouter.ai → Keys |
-| DeepSeek | ~¥1 / M tokens | platform.deepseek.com |
+| **Groq** (default) | free, ~1,000 req/day, no card | console.groq.com → API Keys → Create API Key |
+| OpenRouter | `:free` models, ~50 req/day | openrouter.ai → Keys |
+| DeepSeek | ~¥1 / M tokens, no daily cap | platform.deepseek.com |
+| Google Gemini | free, ~1,500 req/day | aistudio.google.com (needs a non-HK account + IP) |
 | OpenAI | paid | platform.openai.com |
+
+> GitHub Models was retired on 2026-07-30 — a GitHub PAT no longer works for inference.
 
 Any OpenAI-compatible endpoint works — the app only uses `chat.completions`.
 After editing `.env`, verify the key before opening the app:
@@ -49,7 +51,11 @@ python check_key.py
 ```
 
 It prints the endpoint, the model, and either `OK` or a specific reason (401 key rejected,
-429 quota, 404 wrong model name).
+429 quota, 404 wrong model name). If you get 404, list the model ids your key can see:
+
+```bash
+curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $LLM_API_KEY" | head -40
+```
 
 ## Run
 

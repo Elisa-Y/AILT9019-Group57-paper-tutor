@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -59,11 +60,13 @@ def _explain(exc: Exception) -> str:
         return ("401 - the API key was rejected. Check .env: LLM_API_KEY must be the raw key, "
                 "with no quotes and no 'Bearer ' prefix.")
     if status == 403:
-        return ("403 - the key is valid but not allowed to use this model or region. "
-                "Gemini API is not available in Hong Kong; use the GitHub Models preset instead.")
+        return ("403 - the key is valid but not allowed to use this model or this region. "
+                "If you are calling Gemini from Hong Kong, that endpoint is region-blocked; "
+                "switch to the Groq preset in .env.")
     if status == 404:
-        return ("404 - the model name does not exist at this endpoint. Check LLM_MODEL "
-                "(GitHub Models needs the provider prefix, e.g. openai/gpt-4o-mini).")
+        return ("404 - that model id does not exist at this endpoint (or the endpoint path is wrong). "
+                "List what your key can use with: curl -s " + (settings()["base_url"] or "") +
+                "/models -H \"Authorization: Bearer $LLM_API_KEY\"")
     if status == 429:
         return ("429 - rate limit or daily quota reached. Free tiers allow ~50 requests/day; "
                 "wait a minute, or switch to another preset in .env.")
@@ -84,19 +87,27 @@ def chat(system: str, user: str, temperature: float = 0.2, max_tokens: int = 200
     key = _cache_path(cfg["model"], system, user, temperature)
     if key.exists():
         return json.loads(key.read_text())["text"]
-    try:
-        resp = _client().chat.completions.create(
-            model=cfg["model"],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-        )
-        text = (resp.choices[0].message.content or "").strip()
-    except LLMError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - surface a readable message in the UI
-        raise LLMError(_explain(exc)) from exc
+
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = _client().chat.completions.create(
+                model=cfg["model"], temperature=temperature,
+                max_tokens=max_tokens, messages=messages,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            # free tiers are rate limited per minute; one short wait usually clears a 429
+            if getattr(exc, "status_code", None) == 429 and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise LLMError(_explain(exc)) from exc
+    else:  # pragma: no cover
+        raise LLMError(_explain(last_exc or RuntimeError("unknown error")))
+
     if not text:
         raise LLMError("The endpoint returned an empty reply. Try another model in .env.")
     key.write_text(json.dumps({"text": text, "model": cfg["model"]}, ensure_ascii=False))
