@@ -65,7 +65,7 @@ def sidebar() -> None:
         cfg = status()
         (st.success if settings()["ready"] else st.warning)(f"Model: {cfg}")
         if not settings()["ready"]:
-            st.caption("Add `LLM_API_KEY` to `.env` — see `.env.example`.")
+            st.caption("Add `LLM_API_KEY` to `.env`, then run `python check_key.py`.")
 
         st.divider()
         up = st.file_uploader("Upload a paper (PDF)", type="pdf")

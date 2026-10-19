@@ -30,18 +30,26 @@ pip install -r requirements.txt
 cp .env.example .env        # then put your key in .env
 ```
 
-`.env` needs one of these:
+`.env` needs one of these. **Gemini API is not available in Hong Kong, Macao or mainland China**
+(Google's supported-region list excludes them), so the default preset here is GitHub Models:
 
-```bash
-# Gemini (free tier)
-LLM_API_KEY=AIza...
-LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-LLM_MODEL=gemini-2.5-flash
-
-# or OpenAI / DeepSeek: see .env.example
-```
+| Preset | Cost | How to get a key |
+|---|---|---|
+| **GitHub Models** (default) | free, ~50–150 req/day | GitHub → Settings → Developer settings → Fine-grained token → Account permissions → **Models: read-only** |
+| Google Gemini | free, ~1,500 req/day | aistudio.google.com → Get API key (needs a non-HK account + IP) |
+| OpenRouter | `:free` models, 50 req/day | openrouter.ai → Keys |
+| DeepSeek | ~¥1 / M tokens | platform.deepseek.com |
+| OpenAI | paid | platform.openai.com |
 
 Any OpenAI-compatible endpoint works — the app only uses `chat.completions`.
+After editing `.env`, verify the key before opening the app:
+
+```bash
+python check_key.py
+```
+
+It prints the endpoint, the model, and either `OK` or a specific reason (401 key rejected,
+429 quota, 404 wrong model name).
 
 ## Run
 
