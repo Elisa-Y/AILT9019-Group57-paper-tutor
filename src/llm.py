@@ -1,9 +1,14 @@
 """Minimal LLM wrapper: any OpenAI-compatible endpoint + on-disk response cache.
 
 Supported out of the box (set these in .env):
+  HKU ITS  base_url=from developer.hku.hk   model=the id shown in the portal
   Gemini   base_url=https://generativelanguage.googleapis.com/v1beta/openai/  model=gemini-2.5-flash
   OpenAI   (leave base_url empty)                                             model=gpt-4o-mini
   DeepSeek base_url=https://api.deepseek.com                                  model=deepseek-chat
+
+Some gateways (Azure API Management, which the HKU portal looks like) do not read
+`Authorization: Bearer`. Set LLM_AUTH_HEADER to the header name the portal's own
+docs show, e.g. Ocp-Apim-Subscription-Key, and the key is sent there as well.
 
 The cache matters for the demo: if the API is rate limited during the recording,
 the same prompt replays instantly from disk.
@@ -35,7 +40,9 @@ def settings() -> dict:
     key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")
     base = os.getenv("LLM_BASE_URL", "").strip() or None
     model = os.getenv("LLM_MODEL", "").strip() or ("gpt-4o-mini" if base is None else "gemini-2.5-flash")
-    return {"api_key": key, "base_url": base, "model": model, "ready": bool(key)}
+    header = os.getenv("LLM_AUTH_HEADER", "").strip() or None
+    return {"api_key": key, "base_url": base, "model": model,
+            "auth_header": header, "ready": bool(key)}
 
 
 def _client() -> OpenAI:
@@ -45,7 +52,11 @@ def _client() -> OpenAI:
             "No API key found. Create a .env file in the project root with LLM_API_KEY=... "
             "(copy .env.example)."
         )
-    return OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
+    # Send the key both ways: `Authorization: Bearer` for OpenAI-style servers and
+    # the custom header name for API-gateway style servers. Extra headers are ignored
+    # by servers that do not use them.
+    headers = {cfg["auth_header"]: cfg["api_key"]} if cfg["auth_header"] else None
+    return OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], default_headers=headers)
 
 
 def _cache_path(model: str, system: str, user: str, temperature: float) -> Path:
@@ -58,27 +69,36 @@ def _explain(exc: Exception) -> str:
     status = getattr(exc, "status_code", None)
     if status == 401:
         return ("401 - the API key was rejected. Check .env: LLM_API_KEY must be the raw key, "
-                "with no quotes and no 'Bearer ' prefix.")
+                "with no quotes and no 'Bearer ' prefix. On the HKU portal the subscription "
+                "must also be approved, not just requested.")
     if status == 403:
-        return ("403 - the key is valid but not allowed to use this model or this region. "
-                "If you are calling Gemini from Hong Kong, that endpoint is region-blocked; "
-                "switch to the Groq preset in .env.")
+        return ("403 - the key is valid but not allowed to use this model. The subscription may "
+                "not include that model yet, or the quota is exhausted. Check the model list in "
+                "the portal, then update LLM_MODEL.")
     if status == 404:
-        return ("404 - that model id does not exist at this endpoint (or the endpoint path is wrong). "
-                "List what your key can use with: curl -s " + (settings()["base_url"] or "") +
-                "/models -H \"Authorization: Bearer $LLM_API_KEY\"")
+        return ("404 - that model id does not exist at this endpoint (or the endpoint path is "
+                "wrong). Copy LLM_BASE_URL and LLM_MODEL character for character from the "
+                "portal's API documentation page; gateway paths often end in /v1 or /openai/v1.")
     if status == 429:
-        return ("429 - rate limit or daily quota reached. Free tiers allow ~50 requests/day; "
-                "wait a minute, or switch to another preset in .env.")
+        return ("429 - rate limit or quota reached. The HKU portal shares one monthly AI-credit "
+                "budget between the web app and the API, so heavy testing depletes it; wait a "
+                "minute, or top up / switch provider.")
     if "Connection" in type(exc).__name__ or "connect" in str(exc).lower():
         return ("Network error - the endpoint could not be reached. If you are on a campus or "
-                "hotel network, try another network or the GitHub Models preset.")
+                "hotel network, try another network, or run: python netcheck.py")
     if isinstance(exc, AttributeError):
         return ("The endpoint replied with something that is not an OpenAI-style completion. "
                 "Most often LLM_BASE_URL is missing the path, e.g. it should be "
-                "https://generativelanguage.googleapis.com/v1beta/openai/ or "
-                "https://models.github.ai/inference — note the trailing part.")
+                "https://generativelanguage.googleapis.com/v1beta/openai/ — note the trailing part.")
     return f"{type(exc).__name__}: {exc}"
+
+
+def _body_hint(exc: Exception) -> str:
+    """Gateways often explain themselves in the body; the SDK hides it behind a status code."""
+    resp = getattr(exc, "response", None)
+    body = getattr(resp, "text", "") or ""
+    body = body.strip().replace("\n", " ")
+    return f"\n       server said: {body[:300]}" if body and body != "OK" else ""
 
 
 def chat(system: str, user: str, temperature: float = 0.2, max_tokens: int = 2000) -> str:
@@ -104,7 +124,7 @@ def chat(system: str, user: str, temperature: float = 0.2, max_tokens: int = 200
             if getattr(exc, "status_code", None) == 429 and attempt < 2:
                 time.sleep(5 * (attempt + 1))
                 continue
-            raise LLMError(_explain(exc)) from exc
+            raise LLMError(_explain(exc) + _body_hint(exc)) from exc
     else:  # pragma: no cover
         raise LLMError(_explain(last_exc or RuntimeError("unknown error")))
 

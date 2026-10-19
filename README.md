@@ -30,19 +30,27 @@ pip install -r requirements.txt
 cp .env.example .env        # then put your key in .env
 ```
 
-`.env` needs one of these. **Gemini API is not available in Hong Kong, Macao or mainland China**
-(Google's supported-region list excludes them), so the default preset here is Groq:
+`.env` needs one of these. **HKU students should use the HKU ITS Developer Portal** — it is
+free, it works inside Hong Kong, and coursework is exactly the use it is licensed for:
 
 | Preset | Cost | How to get a key |
 |---|---|---|
-| **OpenRouter** (default) | `:free` models, ~50 req/day, no payment | openrouter.ai → Keys → Create key |
+| **HKU ITS Developer Portal** (first choice for HKU) | free, 500k AI credits/month | developer.hku.hk → `student-genai-services` → subscribe → copy base URL + model id from the product docs |
 | DeepSeek | ~¥1 / M tokens, no daily cap | platform.deepseek.com |
+| OpenRouter | `:free` models, ~50 req/day, no payment | openrouter.ai → Keys → Create key |
 | Groq | free, ~1,000 req/day | console.groq.com → API Keys (console unreachable on some networks) |
 | SiliconFlow | free quota on several models | cloud.siliconflow.cn |
-| Google Gemini | free, ~1,500 req/day | aistudio.google.com (needs a non-HK account + IP) |
+| Google Gemini | free, ~1,500 req/day | aistudio.google.com (**not available in HK/Macao/mainland**) |
 | OpenAI | paid | platform.openai.com |
 
 > GitHub Models was retired on 2026-07-30 — a GitHub PAT no longer works for inference.
+
+The HKU portal issues an *API key pair* for chat completion, embedding and image generation.
+Its gateway may not read `Authorization: Bearer`; set `LLM_AUTH_HEADER` to whatever the
+portal's try-it panel shows (usually `Ocp-Apim-Subscription-Key`). Both headers are sent, so
+leaving it empty is safe for ordinary OpenAI-compatible hosts. The monthly credit pool is
+shared with the HKU GenAI web app, and each group member should use their own key rather than
+sharing one.
 
 Any OpenAI-compatible endpoint works — the app only uses `chat.completions`.
 After editing `.env`, verify the key before opening the app:

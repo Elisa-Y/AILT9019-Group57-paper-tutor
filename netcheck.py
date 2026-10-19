@@ -16,6 +16,8 @@ import time
 from urllib.parse import urlparse
 
 HOSTS = [
+    ("HKU dev portal", "https://developer.hku.hk/"),
+    ("HKU GenAI app", "https://genai.hku.hk/"),
     ("OpenRouter", "https://openrouter.ai/"),
     ("OpenRouter API", "https://openrouter.ai/api/v1/models"),
     ("DeepSeek API", "https://api.deepseek.com/"),

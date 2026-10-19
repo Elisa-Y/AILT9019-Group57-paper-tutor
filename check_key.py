@@ -19,9 +19,14 @@ def main() -> int:
     cfg = settings()
     print(f"endpoint : {cfg['base_url'] or 'https://api.openai.com/v1'}")
     print(f"model    : {cfg['model']}")
+    print(f"auth     : {'Bearer + ' + cfg['auth_header'] if cfg['auth_header'] else 'Bearer'}")
     if not cfg["ready"]:
         print("\nFAIL  no key found.")
         print("      cp .env.example .env  and put LLM_API_KEY=... in it")
+        return 1
+    if "REPLACE-WITH" in (cfg["base_url"] or "") or "REPLACE-WITH" in cfg["model"]:
+        print("\nFAIL  .env still contains the placeholder values from .env.example.")
+        print("      Copy LLM_BASE_URL and LLM_MODEL from the portal's API documentation page.")
         return 1
     print(f"key      : {cfg['api_key'][:6]}...{cfg['api_key'][-4:]}  ({len(cfg['api_key'])} chars)")
 
