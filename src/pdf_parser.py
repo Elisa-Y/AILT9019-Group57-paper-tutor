@@ -50,10 +50,74 @@ CANONICAL = {
     "appendix": "Appendix",
 }
 
+# Chinese section names, mapped onto the same canonical set so downstream code
+# (search, Socratic mode, mind map) does not need to know which language it is in.
+CANONICAL_ZH = {
+    "摘要": "Abstract",
+    "中文摘要": "Abstract",
+    "引言": "Introduction",
+    "绪论": "Introduction",
+    "前言": "Introduction",
+    "研究背景": "Background",
+    "背景": "Background",
+    "相关工作": "Related Work",
+    "相关研究": "Related Work",
+    "文献综述": "Related Work",
+    "预备知识": "Preliminaries",
+    "基础知识": "Preliminaries",
+    "方法": "Method",
+    "研究方法": "Method",
+    "方法介绍": "Method",
+    "模型与方法": "Method",
+    "本文方法": "Method",
+    "实验": "Experiments",
+    "实验设置": "Experiments",
+    "实验与分析": "Experiments",
+    "实验结果": "Results",
+    "结果": "Results",
+    "结果与分析": "Results",
+    "分析": "Discussion",
+    "讨论": "Discussion",
+    "结论": "Conclusion",
+    "总结": "Conclusion",
+    "结论与展望": "Conclusion",
+    "结语": "Conclusion",
+    "参考文献": "References",
+    "參考文獻": "References",
+    "附录": "Appendix",
+    "附錄": "Appendix",
+    # Traditional Chinese (common in Hong Kong / Taiwan course readings)
+    "緒論": "Introduction",
+    "簡介": "Introduction",
+    "研究背景": "Background",
+    "相關工作": "Related Work",
+    "文獻探討": "Related Work",
+    "文獻回顧": "Related Work",
+    "預備知識": "Preliminaries",
+    "研究方法": "Method",
+    "實驗": "Experiments",
+    "實驗設置": "Experiments",
+    "實驗結果": "Results",
+    "結果": "Results",
+    "討論": "Discussion",
+    "結論": "Conclusion",
+    "總結": "Conclusion",
+    "結論與展望": "Conclusion",
+}
+
 # Sections that should not enter the retrieval index (noise for question answering).
 EXCLUDED_FROM_INDEX = {"References", "Appendix"}
 
-_HEADING_NUM = re.compile(r"^(?:(\d+(?:\.\d+)*)\.?|[IVX]{1,5}\.)\s+(.+)$")
+_HEADING_NUM_EN = re.compile(r"^(?:(\d+(?:\.\d+)*)\.?|[IVX]{1,5}\.)\s+(.+)$")
+# Chinese headings often have no space after the number: "3.2注意力机制"
+_HEADING_NUM_ZH = re.compile(r"^(\d+(?:\.\d+)*)\s*[\.、]?\s*([\u3400-\u9fff].*)$")
+# Chinese numbering: "第三章 ...", "三、...", "（二）...", "3.2 ..."
+_ZH_NUM_PREFIX = re.compile(
+    r"^(?:第\s*[一二三四五六七八九十百]+\s*[章节部分]|（\s*[一二三四五六七八九十]+\s*）"
+    r"|[一二三四五六七八九十]+\s*[、\.]|\d+(?:\.\d+)*\s*[\.、]?)\s*"
+)
+_CJK_CHAR = re.compile(r"[\u3400-\u9fff]")
+_ZH_ABSTRACT = re.compile(r"^(?:中文)?摘要\s*[:：]\s*(.+)$", re.S)
 _WS = re.compile(r"[ \t]+")
 
 
@@ -132,7 +196,7 @@ def _ordered_blocks(page: "fitz.Page") -> list[tuple[str, float]]:
                 lines.append(span_text)
                 size = max(size, max(s["size"] for s in line["spans"]))
         if lines:
-            text = "\n".join(lines).strip()
+            text = _join_lines(lines).strip()
             if text:
                 items.append({"text": text, "x0": b["bbox"][0], "x1": b["bbox"][2],
                               "y0": b["bbox"][1], "size": size})
@@ -159,25 +223,73 @@ def _body_size(pages_blocks: list[list[tuple[str, float]]]) -> float:
     return statistics.median(sizes) if sizes else 10.0
 
 
+def _join_lines(lines: list[str]) -> str:
+    """Join the lines of one PDF block.
+
+    Latin text keeps its line breaks (a heading split as "1\\nIntroduction" needs
+    them). Chinese text is joined without a separator, because a wrapped Chinese
+    sentence would otherwise get a gap in the middle of a word.
+    """
+    out = ""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if not out:
+            out = line
+        elif _CJK_CHAR.match(out[-1]) and _CJK_CHAR.match(line[0]):
+            out += line
+        else:
+            out += "\n" + line
+    return out
+
+
+def _looks_cjk(text: str) -> bool:
+    return bool(_CJK_CHAR.search(text))
+
+
 def _heading_title(line: str, body_size: float, size: float) -> str | None:
     """Return a section title if this block looks like a heading, else None.
 
-    Two cases:
-      1. named headings ("Abstract", "Related Work") -> normalised to a canonical name
-      2. numbered headings ("3 Model Architecture", "3.1 Encoder and Decoder Stacks")
+    Handles four shapes:
+      1. named English headings ("Abstract", "Related Work")
+      2. numbered English headings ("3 Model Architecture", "3.1 Encoder ...")
+      3. named Chinese headings ("摘要", "相关工作")
+      4. numbered Chinese headings ("3.2 注意力机制", "第三章 方法", "（二）实验")
     """
     text = " ".join(l.strip() for l in line.strip().split("\n") if l.strip())
     if not text or len(text) > 75 or text.endswith("."):
         return None
-    m = _HEADING_NUM.match(text)
+    if text[-1] in "，。；：！？、,;:!?":
+        return None
+
+    m = _HEADING_NUM_EN.match(text) or _HEADING_NUM_ZH.match(text)
     if m:
-        num, name = m.group(1), m.group(2).strip(" .:")
-        if not name or not name[0].isupper() or len(name.split()) > 9:
+        num, name = m.group(1), m.group(2).strip(" .:、：")
+        if not name:
             return None
-        if size < body_size * 0.98:  # body text is not a heading
+        # a heading starts with a capital letter, or with a Chinese character
+        if not (name[0].isupper() or _looks_cjk(name[0])):
             return None
-        return CANONICAL.get(re.sub(r"\s+", " ", name.lower())) or f"{num} {name}"
-    canon = CANONICAL.get(re.sub(r"\s+", " ", text.lower().strip(" .:")))
+        if not _looks_cjk(name) and len(name.split()) > 9:
+            return None
+        # "2017年，..." is body text, not a section: sections never number past 20
+        first = int(re.match(r"\d+", num).group(0))
+        if first > 20:
+            return None
+        # Chinese headings are short; this keeps long wrapped lines out
+        if _looks_cjk(name) and len(name) > 30:
+            return None
+        if size < body_size * (1.02 if _looks_cjk(name) else 0.98):
+            return None
+        key = re.sub(r"\s+", " ", name.lower())
+        return CANONICAL.get(key) or CANONICAL_ZH.get(name) or f"{num} {name}"
+
+    # Named heading (no number). Chinese headings are short and set larger than body text.
+    stripped = _ZH_NUM_PREFIX.sub("", text).strip(" .:、：")
+    canon = CANONICAL.get(re.sub(r"\s+", " ", stripped.lower())) or CANONICAL_ZH.get(stripped)
+    if canon and _looks_cjk(stripped) and size < body_size * 1.02:
+        return None
     return canon
 
 
@@ -220,6 +332,17 @@ def parse_pdf(path: str) -> Paper:
                 continue
 
             para = _clean(text)
+            # Chinese papers usually write the abstract inline: "摘要：本文提出……"
+            # instead of putting it on its own line, so split it into a section here.
+            m_abs = _ZH_ABSTRACT.match(para) if page_no == 1 else None
+            if m_abs and not any(s.title == "Abstract" for s in sections):
+                if current.paragraphs:
+                    sections.append(current)
+                rest = m_abs.group(1).strip()
+                current = Section(title="Abstract")
+                if len(rest) >= 20:
+                    current.paragraphs.append(Paragraph(text=rest, page=page_no))
+                continue
             if len(para) >= 20:
                 current.paragraphs.append(Paragraph(text=para, page=page_no))
 

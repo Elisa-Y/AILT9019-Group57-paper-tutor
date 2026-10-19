@@ -18,6 +18,16 @@ from dataclasses import dataclass
 from .pdf_parser import EXCLUDED_FROM_INDEX, Paper
 
 _WORD = re.compile(r"[a-z0-9][a-z0-9\-\.']*")
+# Chinese/Japanese/Korean text has no spaces, so BM25 needs its own segmentation.
+# Character bigrams are the standard cheap substitute for a word segmenter: they need
+# no dictionary, handle unknown terms (专有名词, 模型名), and work well for retrieval.
+_CJK_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+")
+_CJK_STOP_BIGRAMS = {
+    "我们", "本文", "本章", "可以", "这个", "那个", "这些", "那些", "以及", "但是",
+    "因为", "所以", "如果", "因此", "由于", "并且", "或者", "而是", "就是", "没有",
+    "不是", "一个", "一种", "进行", "通过", "对于", "其中", "为了", "根据", "例如",
+}
+_CJK_STOP_CHARS = set("的了在是和与及对从把被就都也很更最这那其之而或以为我们你他她它")
 _STOP = set(
     """a an the of in on for to and or is are was were be been being with by as at
     from that this these those it its we our they their he she his her which who
@@ -27,8 +37,23 @@ _STOP = set(
 )
 
 
+def _cjk_tokens(text: str) -> list[str]:
+    """Bigrams for CJK runs, single characters when the run is one character long."""
+    out: list[str] = []
+    for run in _CJK_RUN.findall(text):
+        if len(run) == 1:
+            if run not in _CJK_STOP_CHARS:
+                out.append(run)
+            continue
+        for i in range(len(run) - 1):
+            bigram = run[i:i + 2]
+            if bigram not in _CJK_STOP_BIGRAMS:
+                out.append(bigram)
+    return out
+
+
 def tokenize(text: str) -> list[str]:
-    out = []
+    out = _cjk_tokens(text)
     for w in _WORD.findall(text.lower()):
         w = w.strip(".'-")
         if len(w) < 2 or w in _STOP:
@@ -37,6 +62,14 @@ def tokenize(text: str) -> list[str]:
             w = w[:-1]  # crude plural stemming: findings -> finding
         out.append(w)
     return out
+
+
+def detect_lang(text: str) -> str:
+    """'zh' when the text is mostly Chinese, else 'en'. Used to localise UI messages."""
+    sample = text[:4000]
+    cjk = len(_CJK_RUN.findall(sample))
+    letters = len(re.findall(r"[A-Za-z]", sample))
+    return "zh" if cjk * 3 > letters else "en"
 
 
 @dataclass

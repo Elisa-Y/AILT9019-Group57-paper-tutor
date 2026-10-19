@@ -5,7 +5,7 @@ from __future__ import annotations
 from . import prompts
 from .llm import chat_json
 from .pdf_parser import EXCLUDED_FROM_INDEX, Paper
-from .retrieval import BM25Index, Chunk, section_digest
+from .retrieval import BM25Index, Chunk, detect_lang, section_digest
 
 LEVELS = {
     1: "identify / recall",
@@ -16,14 +16,32 @@ LEVELS = {
 }
 
 
+def _lang_of_paper(paper: Paper) -> str:
+    sample = paper.title + "\n" + " ".join(s.text[:400] for s in paper.sections[:3])
+    return detect_lang(sample)
+
+
+def _directive(lang: str) -> str:
+    """Trailing instruction appended to the user prompt.
+
+    The system prompt alone is not enough: the JSON templates are written in English,
+    so the model drifts back to English unless the output language is stated last.
+    """
+    if lang == "zh":
+        return ("\n\nOUTPUT LANGUAGE: 简体中文。上面 JSON 的每个字段值都必须用中文书写，"
+                "包括问题、反馈、提示和术语解释；专业术语、模型名和数字保持原文。")
+    return ""
+
+
 # --------------------------------------------------------------------------- #
 # Overview
 # --------------------------------------------------------------------------- #
 
 def summarize(paper: Paper) -> dict:
+    lang = _lang_of_paper(paper)
     data = chat_json(
         prompts.SYSTEM_TUTOR,
-        prompts.SUMMARY.format(digest=section_digest(paper, 1400)),
+        prompts.SUMMARY.format(digest=section_digest(paper, 1400)) + _directive(lang),
         temperature=0.2,
         max_tokens=1800,
     )
@@ -34,9 +52,10 @@ def summarize(paper: Paper) -> dict:
 
 
 def key_terms(paper: Paper, n: int = 6) -> list[dict]:
+    lang = _lang_of_paper(paper)
     data = chat_json(
         prompts.SYSTEM_TUTOR,
-        prompts.KEY_TERMS.format(digest=section_digest(paper, 1000), n=n),
+        prompts.KEY_TERMS.format(digest=section_digest(paper, 1000), n=n) + _directive(lang),
         temperature=0.3,
         max_tokens=1200,
     )
@@ -56,15 +75,21 @@ def _sources_block(chunks: list[Chunk]) -> str:
 def answer_question(index: BM25Index, question: str, k: int = 5) -> dict:
     hits = index.search(question, k=k)
     if not hits:
+        lang = detect_lang(" ".join(c.text[:300] for c in index.chunks[:3])) if index.chunks else "en"
+        msg = ("没有在论文中找到与这个问题匹配的段落。试着改用论文里出现过的术语，"
+               "或者把问题限定到某一节。"
+               if lang == "zh" else
+               "I could not find any passage in this paper that matches your question. "
+               "Try using a term that appears in the paper, or ask about a specific section.")
         return {
-            "answer": "I could not find any passage in this paper that matches your question. "
-                      "Try using a term that appears in the paper, or ask about a specific section.",
+            "answer": msg,
             "key_points": [], "quote": "", "quote_source": 0,
             "confidence": "low", "not_in_paper": True, "_hits": [],
         }
     data = chat_json(
         prompts.SYSTEM_TUTOR,
-        prompts.QA.format(sources=_sources_block(hits), question=question),
+        prompts.QA.format(sources=_sources_block(hits), question=question)
+        + _directive(detect_lang(question)),
         temperature=0.1,
         max_tokens=900,
     )
@@ -103,6 +128,7 @@ def _section_excerpt(paper: Paper, section: str, limit: int = 6000) -> str:
 def socratic_question(paper: Paper, section: str, level: int, history: list[str]) -> dict:
     s = paper.section(section)
     pages = f"{s.start_page}-{s.end_page}" if s else "?"
+    lang = _lang_of_paper(paper)
     return chat_json(
         prompts.SYSTEM_TUTOR,
         prompts.SOCRATIC_QUESTION.format(
@@ -112,7 +138,7 @@ def socratic_question(paper: Paper, section: str, level: int, history: list[str]
             level_name=LEVELS.get(level, "explain"),
             history="\n".join(history[-4:]) or "(no answers yet)",
             excerpt=_section_excerpt(paper, section),
-        ),
+        ) + _directive(lang),
         temperature=0.5,
         max_tokens=700,
     )
@@ -120,6 +146,9 @@ def socratic_question(paper: Paper, section: str, level: int, history: list[str]
 
 def socratic_evaluate(paper: Paper, section: str, question: str,
                       expected: list[str], student_answer: str) -> dict:
+    lang = detect_lang(student_answer)
+    if lang == "en":
+        lang = _lang_of_paper(paper)
     return chat_json(
         prompts.SYSTEM_TUTOR,
         prompts.SOCRATIC_EVALUATE.format(
@@ -127,7 +156,7 @@ def socratic_evaluate(paper: Paper, section: str, question: str,
             expected="; ".join(expected) or "(not provided)",
             answer=student_answer,
             excerpt=_section_excerpt(paper, section, 3000),
-        ),
+        ) + _directive(lang),
         temperature=0.2,
         max_tokens=800,
     )

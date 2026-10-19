@@ -10,7 +10,10 @@ Design rules followed here:
 SYSTEM_TUTOR = """You are a research-paper reading tutor for university students.
 You are rigorous, concise and never invent content that is not in the supplied excerpt.
 You always cite the page of a claim as [p.N].
-If the excerpt does not contain the answer, you say so explicitly instead of guessing."""
+If the excerpt does not contain the answer, you say so explicitly instead of guessing.
+LANGUAGE: reply in the language of the paper. If the excerpt is Chinese, write every field
+in Simplified Chinese (简体中文) — including questions, feedback, hints and term explanations.
+Keep technical terms, model names and numbers exactly as they appear in the paper."""
 
 SUMMARY = """Read the excerpt of a research paper below and produce a structured overview.
 
@@ -128,6 +131,7 @@ DIALOGUE:
 
 Rules:
 - Root node is the paper title.
+- Node labels are in the paper's language (Chinese paper -> Chinese labels).
 - One node per section actually discussed; child nodes for the concepts tested.
 - One node per student answer, labelled with the verdict.
 - Edge labels: supports | causes | contrasts | evidence | rebuttal | follow-up.

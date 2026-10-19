@@ -113,9 +113,35 @@ paper-tutor/
 │   ├── llm.py             # OpenAI-compatible client, JSON parsing, on-disk response cache
 │   ├── prompts.py         # every prompt, in one file so they can be tuned
 │   └── modes.py           # overview / terms / cited QA / Socratic / mind map
-├── samples/attention.pdf  # test paper
+├── samples/attention.pdf  # English test paper
+├── samples/zh_demo_synthetic.pdf  # generated Chinese test paper (CJK regression)
 └── .env.example
 ```
+
+## Chinese papers (中文论文)
+
+Chinese input works end to end — uploading a Chinese PDF, asking questions in Chinese, and getting
+Chinese answers. Three things had to change for it:
+
+1. **Heading detection.** Chinese papers do not use "Method"; they use `摘要`, `1 引言`, `3.2 注意力机制`,
+   `（二）实验`, `第三章 结论`. These map onto the same canonical sections as the English names, so the
+   rest of the pipeline does not care which language it is in. Traditional Chinese (`緒論`, `實驗`,
+   `參考文獻`) is mapped too.
+2. **Retrieval.** BM25 needs word boundaries and Chinese has none, so CJK runs are indexed as
+   character **bigrams** (`注意力机制` → 注意 / 意力 / 力机 / 机制). No `jieba`, no dictionary, and
+   unknown terms still match.
+3. **Output language.** The JSON templates are English, so the model drifts back to English unless
+   told otherwise. Every prompt now ends with an explicit output-language directive; summaries,
+   questions, feedback and term explanations follow the paper, while Q&A follows the language of
+   your question.
+
+Test fixture: `samples/zh_demo_synthetic.pdf` is a generated two-page Chinese paper (small-sample
+image recognition) used for this check — not a real publication. Verified on it: 9 sections
+detected, Chinese QA returns `68.4%` with `[p.2]`, and Socratic mode asks and grades in Chinese.
+
+Limits worth knowing: scanned Chinese PDFs still need OCR; vertical text and formulas embedded as
+images are not extracted; if a top-level heading has no text of its own (`3 方法` followed directly
+by `3.1`), that empty wrapper section is dropped and only the subsections appear in the list.
 
 ## Design decisions
 
