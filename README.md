@@ -35,9 +35,10 @@ cp .env.example .env        # then put your key in .env
 
 | Preset | Cost | How to get a key |
 |---|---|---|
-| **Groq** (default) | free, ~1,000 req/day, no card | console.groq.com → API Keys → Create API Key |
-| OpenRouter | `:free` models, ~50 req/day | openrouter.ai → Keys |
+| **OpenRouter** (default) | `:free` models, ~50 req/day, no payment | openrouter.ai → Keys → Create key |
 | DeepSeek | ~¥1 / M tokens, no daily cap | platform.deepseek.com |
+| Groq | free, ~1,000 req/day | console.groq.com → API Keys (console unreachable on some networks) |
+| SiliconFlow | free quota on several models | cloud.siliconflow.cn |
 | Google Gemini | free, ~1,500 req/day | aistudio.google.com (needs a non-HK account + IP) |
 | OpenAI | paid | platform.openai.com |
 
@@ -51,10 +52,11 @@ python check_key.py
 ```
 
 It prints the endpoint, the model, and either `OK` or a specific reason (401 key rejected,
-429 quota, 404 wrong model name). If you get 404, list the model ids your key can see:
+429 quota, 404 wrong model name). If a provider's website will not even open, find out whether
+it is your network or the service:
 
 ```bash
-curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $LLM_API_KEY" | head -40
+python netcheck.py
 ```
 
 ## Run
