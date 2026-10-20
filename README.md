@@ -158,6 +158,9 @@ by `3.1`), that empty wrapper section is dropped and only the subsections appear
 
 - Section detection is regex + font-size based. Papers with unusual heading styles fall back to
   page-level sections; nothing breaks, but citations get coarser.
+- Headings that run into the paragraph ("Discussion. In sum, ...") are kept as body text, not
+  section titles. Journal covers (e.g. JSTOR "accessibility remediation" pages) are excluded
+  from the title, but their text stays in *Front Matter*.
 - Table content is indexed as plain text, so numeric questions sometimes retrieve table junk.
 - BM25 misses paraphrases ("how big is the model" vs "number of parameters").
 - No OCR: scanned PDFs are rejected rather than silently mis-parsed.

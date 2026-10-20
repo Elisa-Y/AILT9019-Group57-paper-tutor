@@ -7,7 +7,6 @@ Core path step 1-2 of the pipeline:
 from __future__ import annotations
 
 import re
-import statistics
 from dataclasses import dataclass, field
 
 try:
@@ -39,6 +38,7 @@ CANONICAL = {
     "results and discussion": "Results",
     "analysis": "Discussion",
     "discussion": "Discussion",
+    "general discussion": "Discussion",
     "ablation study": "Discussion",
     "limitations": "Limitations",
     "conclusion": "Conclusion",
@@ -119,6 +119,19 @@ _ZH_NUM_PREFIX = re.compile(
 _CJK_CHAR = re.compile(r"[\u3400-\u9fff]")
 _ZH_ABSTRACT = re.compile(r"^(?:中文)?摘要\s*[:：]\s*(.+)$", re.S)
 _WS = re.compile(r"[ \t]+")
+# Standalone headings like "Study 1" / "Experiment 2a" (common in psych/management papers)
+_STUDY_LIKE = re.compile(
+    r"^(?:Study|Studies|Experiment|Experiments|Exercise|Session|Phase|Part)\s+\d{1,3}[A-Za-z]?$"
+)
+_APPENDIX_LIKE = re.compile(r"^Appendix\s+[A-Z]{1,2}$")
+# Text blocks that are never the paper title (cover pages, banners, citation lines)
+_NOT_TITLE = re.compile(
+    r"arxiv|vol\.\s*\d|http|doi\.org|issn|accessibility support|downloaded from"
+    r"|copyright|©|provided proper attribution",
+    re.I,
+)
+# JSTOR-style "remediated" PDFs duplicate every line with an invisible OCR layer
+_OCR_FONT = "GlyphLess"
 
 
 @dataclass
@@ -178,28 +191,70 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
+def _line_meta(line: dict) -> tuple[str, float, bool] | None:
+    """(raw text, visible font size, is the whole line bold) for one PDF line.
+
+    Size ignores invisible OCR spans (JSTOR 'remediated' files duplicate every
+    line with GlyphLessFont spans whose size differs from the real text).
+    """
+    spans = [s for s in line["spans"] if s["text"].strip()]
+    if not spans:
+        return None
+    visible = [s for s in spans if _OCR_FONT not in s["font"]]
+    use = visible or spans
+    text = "".join(s["text"] for s in line["spans"])
+    size = max(s["size"] for s in use)
+    bold = all((s["flags"] & 16) or "Bold" in s["font"] for s in use)
+    return text, size, bold
+
+
+def _split_block(b: dict) -> list[dict]:
+    """Split one PDF block into (heading | body) segments.
+
+    Journals often emit 'Results\\nChoosing to Use the Model. As predicted...'
+    as a single block; joining the whole block would swallow the heading into
+    the paragraph that follows it. A short bold line starts a new segment.
+    """
+    segments: list[dict] = []
+    for line in b["lines"]:
+        meta = _line_meta(line)
+        if meta is None:
+            continue
+        text, size, bold = meta
+        cls = "head" if (bold and len(text.strip()) <= 75) else "body"
+        merge = False
+        if segments and segments[-1]["cls"] == cls:
+            # Merge multi-line headings only when the font size matches closely:
+            # "Study 1" (11.7pt) followed by "Methods" (9.8pt) are two headings,
+            # not one; a two-line title keeps the same size.
+            merge = cls == "body" or abs(size - segments[-1]["size"]) <= 0.5
+        if merge:
+            seg = segments[-1]
+            seg["lines"].append(text)
+            seg["size"] = max(seg["size"], size)
+        else:
+            segments.append({"cls": cls, "lines": [text], "size": size,
+                             "y0": line["bbox"][1]})
+    out = []
+    for seg in segments:
+        joined = _join_lines(seg["lines"]).strip()
+        if joined:
+            out.append({"text": joined, "x0": b["bbox"][0], "x1": b["bbox"][2],
+                        "y0": seg["y0"], "size": seg["size"]})
+    return out
+
+
 def _ordered_blocks(page: "fitz.Page") -> list[tuple[str, float]]:
-    """Return (text, font_size) blocks in human reading order.
+    """Return (text, font_size) items in human reading order.
 
     Two-column academic layouts need column-major order, otherwise the parser
     interleaves the left and right column line by line.
     """
-    blocks = page.get_text("dict")["blocks"]
     items: list[dict] = []
-    for b in blocks:
+    for b in page.get_text("dict")["blocks"]:
         if b.get("type") != 0:  # 0 = text block
             continue
-        lines, size = [], 0.0
-        for line in b["lines"]:
-            span_text = "".join(s["text"] for s in line["spans"])
-            if span_text.strip():
-                lines.append(span_text)
-                size = max(size, max(s["size"] for s in line["spans"]))
-        if lines:
-            text = _join_lines(lines).strip()
-            if text:
-                items.append({"text": text, "x0": b["bbox"][0], "x1": b["bbox"][2],
-                              "y0": b["bbox"][1], "size": size})
+        items.extend(_split_block(b))
     if not items:
         return []
 
@@ -219,8 +274,21 @@ def _ordered_blocks(page: "fitz.Page") -> list[tuple[str, float]]:
 
 
 def _body_size(pages_blocks: list[list[tuple[str, float]]]) -> float:
-    sizes = [s for page in pages_blocks for (_, s) in page if s > 0]
-    return statistics.median(sizes) if sizes else 10.0
+    """The dominant body font size, weighted by how much text uses it.
+
+    A plain median fails on figure-heavy pages: dozens of tiny axis labels
+    outnumber the paragraphs and drag the 'body size' down to the label size,
+    which then breaks every size-based heading threshold.
+    """
+    weights: dict[float, int] = {}
+    for page in pages_blocks:
+        for text, size in page:
+            if size > 0:
+                key = round(size, 1)
+                weights[key] = weights.get(key, 0) + len(text)
+    if not weights:
+        return 10.0
+    return max(weights.items(), key=lambda kv: kv[1])[0]
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -258,9 +326,10 @@ def _heading_title(line: str, body_size: float, size: float) -> str | None:
       4. numbered Chinese headings ("3.2 注意力机制", "第三章 方法", "（二）实验")
     """
     text = " ".join(l.strip() for l in line.strip().split("\n") if l.strip())
-    if not text or len(text) > 75 or text.endswith("."):
+    if not text or len(text) > 75:
         return None
-    if text[-1] in "，。；：！？、,;:!?":
+    text = text.rstrip(".").rstrip()          # "Results." is still a heading
+    if not text or text[-1] in "，。；：！？、,;:!?":
         return None
 
     m = _HEADING_NUM_EN.match(text) or _HEADING_NUM_ZH.match(text)
@@ -287,6 +356,8 @@ def _heading_title(line: str, body_size: float, size: float) -> str | None:
 
     # Named heading (no number). Chinese headings are short and set larger than body text.
     stripped = _ZH_NUM_PREFIX.sub("", text).strip(" .:、：")
+    if _STUDY_LIKE.match(stripped) or _APPENDIX_LIKE.match(stripped):
+        return stripped          # "Study 1", "Experiment 2a", "Appendix A"
     canon = CANONICAL.get(re.sub(r"\s+", " ", stripped.lower())) or CANONICAL_ZH.get(stripped)
     if canon and _looks_cjk(stripped) and size < body_size * 1.02:
         return None
@@ -315,20 +386,37 @@ def parse_pdf(path: str) -> Paper:
     sections: list[Section] = []
     current = Section(title="Front Matter")
     title = ""
+    best_title: tuple[float, str] | None = None
+    pending_parent: str | None = None
 
     for page_no, page in enumerate(pages_blocks, start=1):
         for text, size in page:
             first_line = text.split("\n")[0].strip()
             if first_line in running:
                 continue
-            if not title and page_no == 1 and size >= body * 1.3 and len(text) < 200:
-                title = _clean(text).replace("\n", " ")
+            # The title is the largest text on the first two pages that does not
+            # look like a cover-page notice or citation banner. Page 1 is often a
+            # JSTOR / course-platform cover rather than the paper itself.
+            if (page_no <= 2 and size >= body * 1.25
+                    and 15 <= len(text) <= 250 and not _NOT_TITLE.search(text)):
+                if best_title is None or size > best_title[0]:
+                    best_title = (size, text)
 
             canonical = _heading_title(text, body, size)
             if canonical:
-                if current.paragraphs:  # keep any accumulated content
+                if current.paragraphs:
                     sections.append(current)
-                current = Section(title=canonical)
+                    pending_parent = None
+                elif current.title != "Front Matter":
+                    # "Study 1" followed directly by "Methods": keep the empty
+                    # heading as a parent label instead of dropping it.
+                    pending_parent = current.title
+                # Journals reuse names ("Results" per study); keep titles unique
+                # so the section picker and lookups stay unambiguous.
+                combined = f"{pending_parent} — {canonical}" if pending_parent else canonical
+                if any(s.title == combined for s in sections):
+                    combined = f"{combined} (p.{page_no})"
+                current = Section(title=combined)
                 continue
 
             para = _clean(text)
@@ -356,6 +444,8 @@ def parse_pdf(path: str) -> Paper:
             for i, p in enumerate(pages_blocks, start=1) if p
         ]
 
+    if best_title:
+        title = best_title[1]
     if not title:
         title = sections[0].paragraphs[0].text[:120] if sections else "Untitled paper"
 
