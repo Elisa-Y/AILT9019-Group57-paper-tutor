@@ -136,7 +136,22 @@ class BM25Index:
                 score += self.idf.get(t, 0.0) * f * (self.k1 + 1) / denom
             # small boost when the query term appears in the section heading
             heading = set(tokenize(self.chunks[i].section))
-            score += 0.6 * len(heading & set(q))
+section_matches = len(heading & set(q))
+
+score += 1.2 * section_matches
+
+# extra boost for important sections
+important = {
+    "Introduction",
+    "Method",
+    "Experiments",
+    "Results",
+    "Discussion",
+    "Conclusion",
+}
+
+if self.chunks[i].section in important:
+    score += 0.5 * section_matches
             if score > 0:
                 scored.append((score, i))
         scored.sort(reverse=True)
