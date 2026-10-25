@@ -30,7 +30,7 @@ def init_state() -> None:
     defaults = {
         "paper": None, "chunks": [], "index": None, "filename": "",
         "summary": None, "terms": None, "chat": [], "turns": [],
-        "question": None, "section": None, "level": 1, "history": [], "q_id": 0, "correct_streak": 0,
+        "question": None, "section": None, "level": 1, "history": [], "q_id": 0,
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -284,17 +284,9 @@ def tab_guided() -> None:
         })
         st.session_state.history.append(f"Q: {q.get('question','')}\nA: {ans.strip()[:200]}")
 
-        if ev.get("verdict") == "correct":
-    st.session_state.correct_streak += 1
-else:
-    st.session_state.correct_streak = 0
+        if ev.get("level_up") and st.session_state.level < 5:
+            st.session_state.level += 1
 
-if (
-    st.session_state.correct_streak >= 2
-    and st.session_state.level < 5
-):
-    st.session_state.level += 1
-    st.session_state.correct_streak = 0
         st.session_state.question = (
             {"question": ev["followup"], "focus": q.get("focus", ""),
              "hint": "", "expected_points": []}
