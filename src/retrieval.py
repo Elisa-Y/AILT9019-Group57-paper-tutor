@@ -134,13 +134,12 @@ class BM25Index:
                     continue
                 denom = f + self.k1 * (1 - self.b + self.b * self.dl[i] / self.avgdl)
                 score += self.idf.get(t, 0.0) * f * (self.k1 + 1) / denom
-            # small boost when the query term appears in the section heading
-            heading = set(tokenize(self.chunks[i].section))
+            # section-aware boost
+heading = set(tokenize(self.chunks[i].section))
 section_matches = len(heading & set(q))
 
 score += 1.2 * section_matches
 
-# extra boost for important sections
 important = {
     "Introduction",
     "Method",
@@ -152,8 +151,9 @@ important = {
 
 if self.chunks[i].section in important:
     score += 0.5 * section_matches
-            if score > 0:
-                scored.append((score, i))
+
+if score > 0:
+    scored.append((score, i))
         scored.sort(reverse=True)
         return [self.chunks[i] for _, i in scored[:k]]
 
