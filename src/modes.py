@@ -74,17 +74,6 @@ def _sources_block(chunks: list[Chunk]) -> str:
 
 def answer_question(index: BM25Index, question: str, k: int = 5) -> dict:
     hits = index.search(question, k=k)
-    # very little evidence retrieved
-if len(hits) < 2:
-    return {
-        "answer": "The paper does not provide enough evidence to answer this question.",
-        "key_points": [],
-        "quote": "",
-        "quote_source": 0,
-        "confidence": "low",
-        "not_in_paper": True,
-        "_hits": hits,
-    }
 
     if not hits:
         lang = detect_lang(" ".join(c.text[:300] for c in index.chunks[:3])) if index.chunks else "en"
