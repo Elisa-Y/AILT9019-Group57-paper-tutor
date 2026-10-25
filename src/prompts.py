@@ -17,6 +17,13 @@ Keep technical terms, model names and numbers exactly as they appear in the pape
 
 SUMMARY = """Read the excerpt of a research paper below and produce a structured overview.
 
+IMPORTANT RULES FOR DIFFICULT PDFs:
+- If the text looks like multiple papers, a journal issue, or starts mid-article, 
+  identify the MAIN research article (usually the longest coherent scientific paper) 
+  and ignore the surrounding fragments, editor notes, or previous/next articles.
+- Prefer the paper that has a clear Abstract / Introduction / Methods / Results structure.
+- Never invent claims. Only use what is present in the excerpt.
+
 EXCERPT
 =======
 {digest}
@@ -28,10 +35,11 @@ Return ONLY a JSON object with these keys:
   "problem": "the research problem and why it matters (2-3 sentences)",
   "contributions": ["3-5 concrete contributions, each a full sentence"],
   "method": "how they did it, in plain language (3-4 sentences)",
-  "findings": ["3-5 main findings, each with the evidence type: benchmark, ablation, case study..."],
-  "limitations": ["2-4 limitations, including ones the authors admit and ones they do not"],
+  "findings": ["3-5 main findings, each with the evidence type"],
+  "limitations": ["2-4 limitations"],
   "cite": "2-3 page numbers for the central claims, e.g. [p.1][p.6]"
 }}
+...
 
 Rules: no markdown, no text outside the JSON. Cite pages as [p.N] inside the sentences where relevant."""
 
